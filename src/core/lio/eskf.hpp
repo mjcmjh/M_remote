@@ -8,6 +8,8 @@
 #include "common/eigen_types.h"
 #include "common/nav_state.h"
 #include "core/lio/anderson_acceleration.h"
+// for sliding-window IQR
+#include "../../../math_test/fixed_size_sliding_window.h"
 
 namespace lightning {
 
@@ -25,7 +27,7 @@ class ESKF {
     static constexpr int process_noise_dim_ = 12;                   // 过程噪声维度
     static constexpr int state_dim_ = NavState::dim;                // 状态维度
     using StateVecType = NavState::VectState;                       // 状态向量类型
-    using CovType = Eigen::Matrix<double, state_dim_, state_dim_>;  // 协方差矩阵
+    using CovType = Eigen::Matrix<double, state_dim_, state_dim_>;  // 协方差矩阵 
     using ProcessNoiseType = Eigen::Matrix<double, process_noise_dim_, process_noise_dim_>;
 
     /// ESKF 观测类型
@@ -52,7 +54,7 @@ class ESKF {
         bool converge_ = true;
 
         Eigen::Matrix<double, Eigen::Dynamic, 1> residual_;          // residual: z-Hx
-        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> h_x_;  // dr/dx, H阵
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> h_x_;  // dr/dx, H阵观测模型矩阵的雅可比矩阵
         Eigen::Matrix<double, Eigen::Dynamic, 1> s_;
         Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> R_;
 
@@ -129,6 +131,20 @@ class ESKF {
     /// anderson acceleration?
     bool use_aa_ = false;
     AndersonAcceleration<double, state_dim_, 10> aa_;
+
+    // sliding window IQR for eigenvalue-based degeneracy detection
+    SlidingWindowIQR eigen_iqr_{36};
+
+    // degeneracy detection flag and recent statistics
+    bool eigen_degenerate_ = false;
+    SlidingWindowIQR::Statistics eigen_last_stats_;
+    Eigen::VectorXd eigen_last_values_;
+
+   public:
+    // Accessors for degeneracy detection
+    bool IsEigenDegenerate() const { return eigen_degenerate_; }
+    const SlidingWindowIQR::Statistics& GetEigenIQRStatistics() const { return eigen_last_stats_; }
+    const Eigen::VectorXd& GetLastEigenValues() const { return eigen_last_values_; }
 };
 
 }  // namespace lightning

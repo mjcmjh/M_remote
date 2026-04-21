@@ -4,6 +4,14 @@
 
 #include "core/lio/eskf.hpp"
 
+//！！！！！！！！！！！！！！！！！！！！！！！
+#include <Eigen/Dense>
+#include <Eigen/Eigenvalues>
+
+#include "../../../math_test/fixed_size_sliding_window.h"
+#include <iostream>
+//！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+
 namespace lightning {
 
 void ESKF::Predict(const double& dt, const ESKF::ProcessNoiseType& Q, const Vec3d& gyro, const Vec3d& acce) {
@@ -210,7 +218,7 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
             h_x_cur.topLeftCorner(dof_measurement, 12) = custom_obs_model_.h_x_;
             custom_obs_model_.R_ = R * Eigen::MatrixXd::Identity(dof_measurement, dof_measurement);
 
-            Eigen::MatrixXd K =
+            Eigen::MatrixXd K =  //卡尔曼增益
                 P_ * h_x_cur.transpose() * (h_x_cur * P_ * h_x_cur.transpose() + custom_obs_model_.R_).inverse();
             K_r = K * custom_obs_model_.residual_;
             K_H = K * h_x_cur;
@@ -337,6 +345,52 @@ void ESKF::Update(ESKF::ObsType obs, const double& R) {
             }
 
             P_ = L_ - K_H.block<23, 15>(0, 0) * P_.template block<15, 23>(0, 0);
+
+// 更改部分！！！！！！ 通过协方差矩阵获得特征值，根据特征值判断是否进入退化环境，并采取后续措施
+            // Compute information matrix H_m = inverse(P_)
+            CovType H_m = P_.ldlt().solve(CovType::Identity()); // safer than direct inverse
+
+            // Eigen decomposition of symmetric information matrix
+            Eigen::SelfAdjointEigenSolver<CovType> es(H_m);
+            Eigen::Matrix<double, CovType::RowsAtCompileTime, 1> eigvals_fixed = es.eigenvalues();
+            Eigen::VectorXd eigenvalues = eigvals_fixed; // dynamic vector for convenience
+
+            // Add all eigenvalues into the sliding window (one update pushes all components)
+            eigen_iqr_.add(eigenvalues);
+            auto stats = eigen_iqr_.getStatistics();
+
+            // Compare Td with each eigenvalue (as you requested)
+            eigen_degenerate_ = false; // reset for this update
+            eigen_last_stats_ = stats;
+            eigen_last_values_ = eigenvalues;
+
+            //std::cout << "00000000000000000000000000000000000000000000000000000000000000000" << std::endl;
+
+            for (int i = 0; i < eigenvalues.size(); ++i) {
+                    /*
+                    double minv = eigenvalues.minCoeff();
+                    double maxv = eigenvalues.maxCoeff();
+                    std::cout << "\n";
+                    std::cout << "[ESKF] degeneracy detected: Td=" << stats.Td << ", eig[" << i << "]="
+                              << eigenvalues(i) << ", min=" << minv << ", max=" << maxv << std::endl;
+                    std::cout << "\n";
+                    */
+                if (stats.Td >= eigenvalues(i)) {
+                    // 标记进入退化环境（替代原来的破坏性测试）
+                    eigen_degenerate_ = true;
+                    // 简短日志输出，方便调试：包含 Td、该特征值索引和值、min/max
+                    double minv = eigenvalues.minCoeff();
+                    double maxv = eigenvalues.maxCoeff();
+                    std::cout << "\n";
+                    std::cout << "[ESKF] degeneracy detected: Td=" << stats.Td << ", eig[" << i << "]="
+                              << eigenvalues(i) << ", min=" << minv << ", max=" << maxv << std::endl;
+                    std::cout << "\n";
+                    // 若你希望进一步动作，可在外部通过 IsEigenDegenerate() / GetEigenIQRStatistics()
+                    // 查询并采取保护措施。
+                    break; // 已标记，退出循环
+                }
+            }
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
             break;
         }
